@@ -1,5 +1,5 @@
 # ---------------------------------------------------------
-# Logic Turf Cloud Server (Final Version)
+# Logic Turf Cloud Server (Date-Selectable Version)
 # ---------------------------------------------------------
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,13 +27,14 @@ def read_root():
 
 @app.get("/api/race")
 def get_race_card(place: str, race_num: int, date: str = None):
+    # dateは "YYYY-MM-DD" 形式で受け取る
     print(f"★検索開始: {date} {place} {race_num}R")
     
     horses = []
-    race_info = {"weather": "不明", "condition": "不明", "bias_suggestion": "D"}
+    race_info = {"weather": "不明", "condition": "不明", "bias_suggestion": "D"} # デフォルト
 
     try:
-        # 1. レース一覧を取得
+        # 1. 指定日のレース一覧を取得
         base_url = "https://race.netkeiba.com/top/race_list.html"
         if date:
             # YYYY-MM-DD -> YYYYMMDD
@@ -48,26 +49,25 @@ def get_race_card(place: str, race_num: int, date: str = None):
 
         target_race_id = None
         
-        # 2. 指定場所のレースIDを探す
+        # 指定場所のレースを探す
         race_list_divs = soup.find_all('div', class_='RaceList_Box')
         for div in race_list_divs:
             place_header = div.find('div', class_='RaceList_DataHeader')
             if not place_header: continue
             
-            # 場所名チェック
+            # 場所名チェック (例: "1回東京..."の中に "東京" があるか)
             if place in place_header.text.strip():
                 race_links = div.find_all('a', href=True)
                 for link in race_links:
                     r_span = link.find('span', class_='RaceNum')
                     if r_span:
                         r_txt = r_span.text.replace('R', '').strip()
-                        # レース番号とリンクの一致を確認
                         if str(race_num) == r_txt and 'race_id=' in link['href']:
                             target_race_id = link['href'].split('race_id=')[1].split('&')[0]
                             break
             if target_race_id: break
         
-        # 3. IDが見つかったら出馬表を取得
+        # 2. レースが見つかったら詳細を取得
         if target_race_id:
             print(f"  -> ID発見: {target_race_id}")
             shutuba_url = f"https://race.netkeiba.com/race/shutuba.html?race_id={target_race_id}"
@@ -75,19 +75,31 @@ def get_race_card(place: str, race_num: int, date: str = None):
             resp_card.encoding = 'EUC-JP'
             soup_card = BeautifulSoup(resp_card.text, 'html.parser')
             
-            # 馬場情報の取得
+            # --- 馬場状態・天候の取得 ---
             data_div = soup_card.find('div', class_='RaceData01')
             if data_div:
                 text = data_div.text.strip()
+                # 天候
                 if "天候:晴" in text: race_info["weather"] = "晴"
+                elif "天候:曇" in text: race_info["weather"] = "曇"
                 elif "天候:雨" in text: race_info["weather"] = "雨"
+                elif "天候:小雨" in text: race_info["weather"] = "小雨"
                 
-                if "馬場:良" in text: race_info.update({"condition": "良", "bias_suggestion": "D"})
-                elif "馬場:稍" in text: race_info.update({"condition": "稍重", "bias_suggestion": "C"})
-                elif "馬場:重" in text: race_info.update({"condition": "重", "bias_suggestion": "B"})
-                elif "馬場:不" in text: race_info.update({"condition": "不良", "bias_suggestion": "B"})
+                # 馬場
+                if "馬場:良" in text: 
+                    race_info["condition"] = "良"
+                    race_info["bias_suggestion"] = "D" 
+                elif "馬場:稍" in text: 
+                    race_info["condition"] = "稍重"
+                    race_info["bias_suggestion"] = "C" 
+                elif "馬場:重" in text: 
+                    race_info["condition"] = "重"
+                    race_info["bias_suggestion"] = "B" 
+                elif "馬場:不" in text: 
+                    race_info["condition"] = "不良"
+                    race_info["bias_suggestion"] = "B" 
 
-            # 馬データの取得
+            # --- 出走馬データの抽出 ---
             rows = soup_card.select('tr.HorseList')
             for row in rows:
                 try:
@@ -107,16 +119,9 @@ def get_race_card(place: str, race_num: int, date: str = None):
     except Exception as e:
         print(f"Error: {e}")
 
-    # 結果を返す（見つからない場合はエラーメッセージを含める）
-    if not horses:
-        return {
-            "status": "error",
-            "message": "データが見つかりませんでした。日付や場所が正しいか確認してください。",
-            "horses": []
-        }
-
     return {
-        "status": "success",
+        "status": "success" if horses else "error",
+        "message": "データが見つかりませんでした" if not horses else "OK",
         "meta": {
             "place": place, 
             "race_num": race_num, 
